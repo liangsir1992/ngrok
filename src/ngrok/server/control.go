@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"fmt"
 	"io"
 	"ngrok/conn"
@@ -10,6 +11,8 @@ import (
 	"runtime/debug"
 	"strings"
 	"time"
+
+	_ "github.com/go-sql-driver/mysql"
 )
 
 const (
@@ -18,6 +21,13 @@ const (
 	controlWriteTimeout = 10 * time.Second
 	proxyStaleDuration  = 60 * time.Second
 	proxyMaxPoolSize    = 10
+
+	USERNAME = "root"
+	PASSWORD = "root"
+	NETWORK  = "tcp"
+	SERVER   = "10.12.2.26"
+	PORT     = 13306
+	DATABASE = "ry"
 )
 
 type Control struct {
@@ -60,6 +70,10 @@ type Control struct {
 	shutdown *util.Shutdown
 }
 
+type AuthToken struct {
+	count sql.NullInt32
+}
+
 func NewControl(ctlConn conn.Conn, authMsg *msg.Auth) {
 	var err error
 
@@ -82,6 +96,54 @@ func NewControl(ctlConn conn.Conn, authMsg *msg.Auth) {
 		ctlConn.Close()
 	}
 
+	validAuthToken := func(token string) bool {
+		authToken := new(AuthToken)
+		dsn := fmt.Sprintf("%s:%s@%s(%s:%d)/%s", USERNAME, PASSWORD, NETWORK, SERVER, PORT, DATABASE)
+		DB, err := sql.Open("mysql", dsn)
+		if err != nil {
+			fmt.Printf("Open mysql failed,err:%v\n", err)
+			return false
+		}
+		DB.SetConnMaxLifetime(100 * time.Second)
+		DB.SetMaxOpenConns(100)
+		DB.SetMaxIdleConns(16)
+
+		row := DB.QueryRow("select count(*) as tokenCount from sys_ngrok_token where auth_token=?", token)
+
+		row.Scan(&authToken.count)
+
+		if authToken.count.Int32 > 0 {
+			return true
+		}
+
+		return false
+	}
+
+	// readLine := func(token string) (bool, error) {
+
+	// 	if token == "" {
+	// 		return false, nil;
+	// 	}
+	// 	f, err := os.Open(filename)
+	// 	if err != nil {
+	// 		return false, err
+	// 	}
+	// 	buf := bufio.NewReader(f)
+	// 	for {
+	// 		line, err := buf.ReadString('\n')
+	// 		line = strings.TrimSpace(line)
+	// 		if line == token {
+	// 			return true, nil
+	// 		}
+	// 		if err != nil {
+	// 			if err == io.EOF {
+	// 				return false, nil
+	// 			}
+	// 			return false, err
+	// 		}
+	// 	}
+	// 	return false, nil
+	// }
 	// register the clientid
 	c.id = authMsg.ClientId
 	if c.id == "" {
@@ -98,6 +160,14 @@ func NewControl(ctlConn conn.Conn, authMsg *msg.Auth) {
 
 	if authMsg.Version != version.Proto {
 		failAuth(fmt.Errorf("Incompatible versions. Server %s, client %s. Download a new version at http://ngrok.com", version.MajorMinor(), authMsg.Version))
+		return
+	}
+	// authd, err := readLine(authMsg.User, "authtokens.txt")
+
+	authd := validAuthToken(authMsg.User)
+
+	if authd != true {
+		failAuth(fmt.Errorf("authtoken %s invalid", "is"))
 		return
 	}
 
@@ -120,16 +190,40 @@ func NewControl(ctlConn conn.Conn, authMsg *msg.Auth) {
 	c.out <- &msg.ReqProxy{}
 
 	// manage the connection
-	go c.manager()
+	go c.manager(authMsg.User)
 	go c.reader()
 	go c.stopper()
 }
 
 // Register a new tunnel on this control connection
-func (c *Control) registerTunnel(rawTunnelReq *msg.ReqTunnel) {
+func (c *Control) registerTunnel(rawTunnelReq *msg.ReqTunnel, token string) {
 	for _, proto := range strings.Split(rawTunnelReq.Protocol, "+") {
 		tunnelReq := *rawTunnelReq
 		tunnelReq.Protocol = proto
+
+		subDomain := tunnelReq.Subdomain
+		if subDomain != "" {
+			dsn := fmt.Sprintf("%s:%s@%s(%s:%d)/%s", USERNAME, PASSWORD, NETWORK, SERVER, PORT, DATABASE)
+			DB, err := sql.Open("mysql", dsn)
+			if err != nil {
+				fmt.Printf("Open mysql failed,err:%v\n", err)
+				return
+			}
+			DB.SetConnMaxLifetime(100 * time.Second)
+			DB.SetMaxOpenConns(100)
+			DB.SetMaxIdleConns(16)
+
+			row := DB.QueryRow("select count(*) as tokenCount from sys_ngrok_token where auth_token=? and sub_domain =?", token, subDomain)
+
+			authToken := new(AuthToken)
+			row.Scan(&authToken.count)
+
+			if !(authToken.count.Int32 > 0) {
+				fmt.Printf("register Tunnel failed, err sub domain.\n")
+				return
+			}
+		}
+
 
 		c.conn.Debug("Registering new tunnel")
 		t, err := NewTunnel(&tunnelReq, c)
@@ -157,7 +251,7 @@ func (c *Control) registerTunnel(rawTunnelReq *msg.ReqTunnel) {
 	}
 }
 
-func (c *Control) manager() {
+func (c *Control) manager(token string) {
 	// don't crash on panics
 	defer func() {
 		if err := recover(); err != nil {
@@ -191,7 +285,7 @@ func (c *Control) manager() {
 
 			switch m := mRaw.(type) {
 			case *msg.ReqTunnel:
-				c.registerTunnel(m)
+				c.registerTunnel(m, token)
 
 			case *msg.Ping:
 				c.lastPing = time.Now()
@@ -322,7 +416,9 @@ func (c *Control) GetProxy() (proxyConn conn.Conn, err error) {
 	default:
 		// no proxy available in the pool, ask for one over the control channel
 		c.conn.Debug("No proxy in pool, requesting proxy from control . . .")
-		if err = util.PanicToError(func() { c.out <- &msg.ReqProxy{} }); err != nil {
+		if err = util.PanicToError(func() {
+			c.out <- &msg.ReqProxy{}
+		}); err != nil {
 			return
 		}
 
