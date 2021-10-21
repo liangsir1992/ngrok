@@ -1,0 +1,29 @@
+server_addr: "viya.zhen:4443"
+trust_host_root_certs: false
+#auth_token: 123456
+auth_token: 1451073342818746368
+
+tunnels:
+ ssh:
+  remote_port: 1122
+  proto:
+   tcp: 22
+ ss:
+  emote_port: 8388
+  proto:
+   tcp: 8388
+ ftp:
+  remote_port: 20
+  proto:
+   tcp: 20
+ ftp2:
+  remote_port: 21
+  proto:
+   tcp: 21
+ http:
+  subdomain: aaa
+  proto:
+   http: 8080
+   https: 8443
+
+# 启动的时候直接使用 ./ngrok -config=ngrok.cfg -log=log/ngrok.log start http（ssh、ss、ftp、ftp2等）
