@@ -202,7 +202,16 @@ func (c *Control) registerTunnel(rawTunnelReq *msg.ReqTunnel, token string) {
 		tunnelReq.Protocol = proto
 
 		subDomain := tunnelReq.Subdomain
-		if subDomain != "" {
+		if tunnelReq.Protocol == "" {
+			fmt.Printf("register Tunnel failed, err Protocol.\n")
+			return
+		}
+
+		if tunnelReq.Protocol != "tcp" && tunnelReq.Protocol != "udp" {
+			if subDomain == "" {
+				fmt.Printf("register Tunnel failed, err sub Domain.\n")
+				return
+			}
 			dsn := fmt.Sprintf("%s:%s@%s(%s:%d)/%s", USERNAME, PASSWORD, NETWORK, SERVER, PORT, DATABASE)
 			DB, err := sql.Open("mysql", dsn)
 			if err != nil {
@@ -222,8 +231,8 @@ func (c *Control) registerTunnel(rawTunnelReq *msg.ReqTunnel, token string) {
 				fmt.Printf("register Tunnel failed, err sub domain.\n")
 				return
 			}
-		}
 
+		}
 
 		c.conn.Debug("Registering new tunnel")
 		t, err := NewTunnel(&tunnelReq, c)
