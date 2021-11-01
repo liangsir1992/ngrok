@@ -108,6 +108,8 @@ func NewControl(ctlConn conn.Conn, authMsg *msg.Auth) {
 		DB.SetMaxOpenConns(100)
 		DB.SetMaxIdleConns(16)
 
+		defer DB.Close()
+
 		row := DB.QueryRow("select count(*) as tokenCount from sys_ngrok_token where auth_token=?", token)
 
 		row.Scan(&authToken.count)
@@ -221,6 +223,8 @@ func (c *Control) registerTunnel(rawTunnelReq *msg.ReqTunnel, token string) {
 			DB.SetConnMaxLifetime(100 * time.Second)
 			DB.SetMaxOpenConns(100)
 			DB.SetMaxIdleConns(16)
+
+			DB.Close()
 
 			row := DB.QueryRow("select count(*) as tokenCount from sys_ngrok_token where auth_token=? and sub_domain =?", token, subDomain)
 
